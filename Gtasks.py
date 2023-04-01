@@ -13,17 +13,16 @@ from datetime import datetime
 class Scheduler:
     def __init__(self) -> None:
         self.today = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
-        self.start = self.cur_time = datetime(
-            self.today.year, self.today.month, self.today.day, 6, 30
-        )
+        self.start = datetime(self.today.year, self.today.month, self.today.day, 6, 30)
         self.end = datetime(self.today.year, self.today.month, self.today.day, 11, 00)
         self.unspecified_tasks = []
         self.last_completed_task = None
         # timeline of events
         self.timeline = Timeline()
+        self.gcal_tasks = set()
         self.authenticate()
 
-    def authenticate(self):
+    def authenticate(self) -> None:
         self.creds = None
         # The file token.json stores the user's access and refresh tokens, and is
         # created automatically when the authorization flow completes for the first
@@ -47,7 +46,7 @@ class Scheduler:
             with open("token.json", "w") as token:
                 token.write(self.creds.to_json())
 
-    def get_gcal_tasks(self):
+    def get_gcal_tasks(self) -> None:
         try:
             service = build("calendar", "v3", credentials=self.creds)
             # calendar_list = service.calendarList().list().execute()
@@ -78,21 +77,129 @@ class Scheduler:
                 new_task = EventTask(
                     name, description, duration, self.today, 4, start, end
                 )
-                self.timeline.insert(new_task)
-            print(self.timeline)
+                self.timeline.gcal_insert(new_task)
+                self.gcal_tasks.add(new_task)
+
         except HttpError as error:
             print("An error occurred: %s" % error)
 
-    def get_gtasks(self):
+    def get_gtasks(self) -> list:
         try:
             service = build("tasks", "v1", credentials=self.creds)
-
             # results = service.tasklists().list().execute()
             # results = service.tasks().list().execute()
             results = service.tasks().list(tasklist="V3BCZU50NHVTNnpUMEV5Mw").execute()
+
+            ordered_list = []
             for item in results["items"]:
-                print(item)
-            # print(service.get())
+                name = item["title"]
+                priority = item["position"]
+                notes = item["notes"]
+                time = notes.split(":")
+                hours = int(time[0])
+                min = int(time[1])
+                duration = hours * 60 + min
+                new_task = EventTask(name, "", duration, self.today, priority)
+                ordered_list.append(new_task)
+            ordered_list = sorted(ordered_list, key=lambda x: x.priority, reverse=False)
+            # for item in ordered_list:
+            #     print(item)
+
+            return ordered_list
+        except HttpError as error:
+            print("An error occurred: %s" % error)
+
+    def populate_timeline(self) -> None:
+        ordered_tasks = self.get_gtasks()
+        for g_task in ordered_tasks:
+            # TODO: I cannot rely on the user or myself having a morning and night routine to signify the end of day. I need to modify the timeline such that it knows when the beginning and end of day are
+            for idx, task in enumerate(self.timeline.timeline[:-1]):
+                next_task = self.timeline.get(idx + 1)
+                next_availability = (next_task.start_time - task.end_time).seconds / 60
+                # exclude 15 minute time windows as they represent gaps between tasks
+                if next_availability > 15 and g_task.duration < (
+                    next_availability - 15
+                ):
+                    g_task.start_time = task.end_time + timedelta(minutes=15)
+                    g_task.end_time = g_task.start_time + timedelta(
+                        minutes=g_task.duration
+                    )
+                    self.timeline.gtask_insert(idx + 1, g_task)
+                    break
+                else:
+                    continue
+
+    def remove_gcal_from_timeline(self) -> None:
+        """
+        remove gcal events from local timeline to prevent duplicate events being created
+        """
+        # TODO: how to create a list wrapper?
+        for event in self.gcal_tasks:
+            for idx, timeline_event in enumerate(self.timeline.timeline):
+                if event == timeline_event:
+                    self.timeline.timeline.pop(idx)
+                    break
+
+    def update_calendar(self) -> None:
+        try:
+            service = build("calendar", "v3", credentials=self.creds)
+
+            for item in self.timeline.timeline:
+                event = {
+                    "summary": item.name,
+                    "description": item.description,
+                    "start": {
+                        "dateTime": item.start_time.isoformat(),
+                        "timeZone": "America/Los_Angeles",
+                    },
+                    "end": {
+                        "dateTime": item.end_time.isoformat(),
+                        "timeZone": "America/Los_Angeles",
+                    },
+                }
+                event = (
+                    service.events()
+                    .insert(
+                        calendarId="5afb0892b1bcaf333681a006b3367b2e3266d38e444d62a48e4b348fc64bf37a@group.calendar.google.com",
+                        body=event,
+                    )
+                    .execute()
+                )
+
+        except HttpError as error:
+            print("An error occurred: %s" % error)
+
+    def remove_scheduled_events(self, date=None):
+        if not date:
+            date = self.today
+
+        try:
+            service = build("calendar", "v3", credentials=self.creds)
+
+            dates = [
+                datetime(date.year, date.month, date.day, 0, 0, 0),
+                datetime(date.year, date.month, date.day, 23, 59, 59),
+            ]
+
+            res = (
+                service.events()
+                .list(
+                    calendarId="5afb0892b1bcaf333681a006b3367b2e3266d38e444d62a48e4b348fc64bf37a@group.calendar.google.com",
+                    timeMin=dates[0].isoformat() + "-07:00",
+                    timeMax=dates[1].isoformat() + "-07:00",
+                    singleEvents=True,
+                    orderBy="startTime",
+                )
+                .execute()
+            )
+
+            events = res["items"]
+            for event in events:
+                service.events().delete(
+                    calendarId="5afb0892b1bcaf333681a006b3367b2e3266d38e444d62a48e4b348fc64bf37a@group.calendar.google.com",
+                    eventId=event["id"],
+                ).execute()
+
         except HttpError as error:
             print("An error occurred: %s" % error)
 
@@ -100,5 +207,9 @@ class Scheduler:
 if __name__ == "__main__":
     scheduler = Scheduler()
     scheduler.get_gcal_tasks()
-    scheduler.get_gtasks()
-
+    scheduler.populate_timeline()
+    # print(scheduler.timeline)
+    scheduler.remove_gcal_from_timeline()
+    scheduler.update_calendar()
+    # date = datetime(2023, 3, 31, 5, 5, 5)
+    # scheduler.remove_scheduled_events(date)

@@ -5,7 +5,16 @@ class TimeDuration:
 
 
 class EventTask:
-    def __init__(self, name, description, duration, due_date, priority, start_time = None, end_time = None) -> None:
+    def __init__(
+        self,
+        name,
+        description,
+        duration,
+        due_date,
+        priority,
+        start_time=None,
+        end_time=None,
+    ) -> None:
         """
         due_date: datetime object
         duration: duration of time to complete task (minutes)
@@ -26,7 +35,7 @@ class Timeline:
     def __init__(self) -> None:
         self.timeline = []
 
-    def insert(self, event_to_add) -> None:
+    def gcal_insert(self, event_to_add) -> None:
         if not self.timeline:
             self.timeline.append(event_to_add)
             return
@@ -39,7 +48,14 @@ class Timeline:
 
         self.timeline.append(event_to_add)
 
+    def gtask_insert(self, idx, event_to_add) -> None:
+        if idx >= len(self.timeline):
+            self.timeline.append(event_to_add)
+        else:
+            self.timeline.insert(idx, event_to_add)
 
+    def get(self, idx) -> EventTask:
+        return self.timeline[idx]
 
     def __str__(self) -> str:
         timeline_string = ""
