@@ -10,6 +10,7 @@ from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
 import os.path
 import json
+from collections import defaultdict
 
 
 class Scheduler:
@@ -120,35 +121,61 @@ class Scheduler:
         except Exception as error:
             print(error)
 
-    def timeblock_timeline(self) -> None:
+    def timeblock_timeline(self) -> list:
         blocks = []
         for idx, task in enumerate(self.timeline.timeline[:-1]):
             next_task = self.timeline.get(idx + 1)
             next_availability = (next_task.start_time - task.end_time).seconds / 60
             # exclude 15 minute time windows as they represent gaps between tasks
-            if next_availability > 15:
-                blocks.append((task.end_time, next_task.start_time))
-        print(blocks)
+            timebuffer = timedelta(minutes=15)
+            task_start = task.end_time + timebuffer
+            while next_availability > 30:
+                next_block_end = task_start + timedelta(hours=1, minutes=30)
+                end_time = min(next_block_end, next_task.start_time - timebuffer)
+                timeblock = [task_start, end_time]
+                next_availability = (
+                    next_task.start_time - timebuffer - end_time
+                ).seconds / 60 - 30
+                task_start = end_time + timedelta(minutes=30)
+                blocks.append(timeblock)
+
+        return blocks
 
     def populate_timeline(self) -> None:
         ordered_tasks = self.get_tasks()
+        timeblocks = self.timeblock_timeline()
+        dict_timeline = defaultdict(list)
         for g_task in ordered_tasks:
             # TODO: I cannot rely on the user or myself having a morning and night routine to signify the end of day. I need to modify the timeline such that it knows when the beginning and end of day are
-            for idx, task in enumerate(self.timeline.timeline[:-1]):
-                next_task = self.timeline.get(idx + 1)
-                next_availability = (next_task.start_time - task.end_time).seconds / 60
-                # exclude 15 minute time windows as they represent gaps between tasks
-                if next_availability > 15 and g_task.duration < (
-                    next_availability - 15
-                ):
-                    g_task.start_time = task.end_time + timedelta(minutes=15)
+            # for idx, task in enumerate(self.timeline.timeline[:-1]):
+            #     next_task = self.timeline.get(idx + 1)
+            #     next_availability = (next_task.start_time - task.end_time).seconds / 60
+            #     # exclude 15 minute time windows as they represent gaps between tasks
+            #     if next_availability > 15 and g_task.duration < (
+            #         next_availability - 15
+            #     ):
+            #         g_task.start_time = task.end_time + timedelta(minutes=15)
+            #         g_task.end_time = g_task.start_time + timedelta(
+            #             minutes=g_task.duration
+            #         )
+            #         self.timeline.gtask_insert(idx + 1, g_task)
+            #         break
+
+            for idx, block in enumerate(timeblocks):
+                time_in_block = (block[1] - block[0]).seconds / 60
+                if g_task.duration <= time_in_block:
+                    g_task.start_time = block[0]
                     g_task.end_time = g_task.start_time + timedelta(
                         minutes=g_task.duration
                     )
-                    self.timeline.gtask_insert(idx + 1, g_task)
+                    dict_timeline[idx].append(g_task)
+                    block[0] = g_task.end_time
                     break
-                else:
-                    continue
+
+        final_timeline = []
+        for idx in range(len(dict_timeline.keys())):
+            final_timeline += dict_timeline[idx]
+        self.timeline.timeline = final_timeline
 
     def remove_gcal_from_timeline(self) -> None:
         """
@@ -227,9 +254,8 @@ class Scheduler:
 if __name__ == "__main__":
     scheduler = Scheduler()
     scheduler.get_gcal_tasks()
-    scheduler.timeblock_timeline()
     scheduler.populate_timeline()
-    scheduler.remove_gcal_from_timeline()
-    # scheduler.update_calendar()
+    scheduler.update_calendar()
+    # scheduler.remove_gcal_from_timeline()
     # date = datetime(2023, 3, 31, 5, 5, 5)
     # scheduler.remove_scheduled_events()
