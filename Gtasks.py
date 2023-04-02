@@ -206,10 +206,10 @@ class Scheduler:
 
 if __name__ == "__main__":
     scheduler = Scheduler()
-    scheduler.get_gcal_tasks()
-    scheduler.populate_timeline()
+    # scheduler.get_gcal_tasks()
+    # scheduler.populate_timeline()
     # print(scheduler.timeline)
-    scheduler.remove_gcal_from_timeline()
-    scheduler.update_calendar()
+    # scheduler.remove_gcal_from_timeline()
+    # scheduler.update_calendar()
     # date = datetime(2023, 3, 31, 5, 5, 5)
-    # scheduler.remove_scheduled_events(date)
+    scheduler.remove_scheduled_events()
