@@ -51,13 +51,22 @@ class Scheduler:
             with open("token.json", "w") as token:
                 token.write(self.creds.to_json())
 
-    def get_gcal_tasks(self) -> None:
+    def get_gcal_tasks(self, is_beginning=False) -> None:
+        """
+        params:
+        is_beginning is a boolean flag which is true iff we are populating from the start of the day (12am of the current day). It is false when user is running code in the middle of the day and is populating tasks from middle of the day.
+        """
         try:
             service = build("calendar", "v3", credentials=self.creds)
             # calendar_list = service.calendarList().list().execute()
             # print(calendar_list)
+            beginning_time = (
+                datetime(self.today.year, self.today.month, self.today.day, 0, 0, 0)
+                if is_beginning
+                else datetime.now()
+            )
             today_date = [
-                datetime(self.today.year, self.today.month, self.today.day, 0, 0, 0),
+                beginning_time,
                 datetime(self.today.year, self.today.month, self.today.day, 23, 59, 59),
             ]
             events_result = (
@@ -72,6 +81,7 @@ class Scheduler:
                 .execute()
             )
             items = events_result["items"]
+            print(items)
 
             for item in items:
                 name = item["summary"]
@@ -125,6 +135,8 @@ class Scheduler:
         blocks = []
         for idx, task in enumerate(self.timeline.timeline[:-1]):
             next_task = self.timeline.get(idx + 1)
+            if task.end_time > next_task.start_time:
+                continue
             next_availability = (next_task.start_time - task.end_time).seconds / 60
             # exclude 15 minute time windows as they represent gaps between tasks
             timebuffer = timedelta(minutes=15)
@@ -133,9 +145,7 @@ class Scheduler:
                 next_block_end = task_start + timedelta(hours=1, minutes=30)
                 end_time = min(next_block_end, next_task.start_time - timebuffer)
                 timeblock = [task_start, end_time]
-                next_availability = (
-                    next_task.start_time - timebuffer - end_time
-                ).seconds / 60 - 30
+                next_availability = (next_task.start_time - end_time).seconds / 60 - 30
                 task_start = end_time + timedelta(minutes=30)
                 blocks.append(timeblock)
 
@@ -189,6 +199,7 @@ class Scheduler:
                     break
 
     def update_calendar(self) -> None:
+        scheduler.remove_scheduled_events()
         try:
             service = build("calendar", "v3", credentials=self.creds)
 
@@ -254,8 +265,13 @@ class Scheduler:
 if __name__ == "__main__":
     scheduler = Scheduler()
     scheduler.get_gcal_tasks()
+
+    # scheduler.timeblock_timeline()
+
     scheduler.populate_timeline()
     scheduler.update_calendar()
+
     # scheduler.remove_gcal_from_timeline()
     # date = datetime(2023, 3, 31, 5, 5, 5)
+
     # scheduler.remove_scheduled_events()
