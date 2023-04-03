@@ -156,21 +156,6 @@ class Scheduler:
         timeblocks = self.timeblock_timeline()
         dict_timeline = defaultdict(list)
         for g_task in ordered_tasks:
-            # TODO: I cannot rely on the user or myself having a morning and night routine to signify the end of day. I need to modify the timeline such that it knows when the beginning and end of day are
-            # for idx, task in enumerate(self.timeline.timeline[:-1]):
-            #     next_task = self.timeline.get(idx + 1)
-            #     next_availability = (next_task.start_time - task.end_time).seconds / 60
-            #     # exclude 15 minute time windows as they represent gaps between tasks
-            #     if next_availability > 15 and g_task.duration < (
-            #         next_availability - 15
-            #     ):
-            #         g_task.start_time = task.end_time + timedelta(minutes=15)
-            #         g_task.end_time = g_task.start_time + timedelta(
-            #             minutes=g_task.duration
-            #         )
-            #         self.timeline.gtask_insert(idx + 1, g_task)
-            #         break
-
             for idx, block in enumerate(timeblocks):
                 time_in_block = (block[1] - block[0]).seconds / 60
                 if g_task.duration <= time_in_block:
