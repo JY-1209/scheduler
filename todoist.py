@@ -32,7 +32,7 @@ class Scheduler:
             self.today.year,
             self.today.month,
             self.today.day,
-            23,
+            11,
             00,
             tzinfo=dt.timezone(dt.timedelta(days=-1, seconds=61200)),
         )
@@ -54,19 +54,19 @@ class Scheduler:
             "https://www.googleapis.com/auth/calendar",
             "https://www.googleapis.com/auth/tasks",
         ]
-        if os.path.exists("token.json"):
-            self.creds = Credentials.from_authorized_user_file("token.json", scopes)
+        if os.path.exists("Schedular/token.json"):
+            self.creds = Credentials.from_authorized_user_file("Schedular/token.json", scopes)
         # If there are no (valid) credentials available, let the user log in.
         if not self.creds or not self.creds.valid:
             if self.creds and self.creds.expired and self.creds.refresh_token:
                 self.creds.refresh(Request())
             else:
                 flow = InstalledAppFlow.from_client_secrets_file(
-                    "credentials.json", scopes
+                    "Schedular/credentials.json", scopes
                 )
                 self.creds = flow.run_local_server(port=0)
             # Save the credentials for the next run
-            with open("token.json", "w") as token:
+            with open("Schedular/token.json", "w") as token:
                 token.write(self.creds.to_json())
 
     def get_gcal_tasks(self, is_beginning=False) -> None:
@@ -164,13 +164,13 @@ class Scheduler:
         else:
             cur_time = datetime.now(
                 tz=dt.timezone(dt.timedelta(days=-1, seconds=61200))
-            )
+            ) - dt.timedelta(minutes=3)
 
         blocks = []
         for task in self.timeline.timeline:
             if cur_time < task.start_time:
                 time_diff = (task.start_time - cur_time).seconds / 60
-                timebuffer = timedelta(minutes=15)
+                timebuffer = timedelta(minutes=5)
                 task_start = cur_time + timebuffer
                 while time_diff > 30:
                     next_block_end = task_start + timedelta(hours=1, minutes=30)
@@ -183,7 +183,7 @@ class Scheduler:
 
         if cur_time < self.end:
             time_diff = (self.end - cur_time).seconds / 60
-            timebuffer = timedelta(minutes=15)
+            timebuffer = timedelta(minutes=5)
             task_start = cur_time + timebuffer
             while time_diff > 30:
                 next_block_end = task_start + timedelta(hours=1, minutes=30)
@@ -300,7 +300,10 @@ if __name__ == "__main__":
     # scheduler.timeblock_timeline()
 
     scheduler.populate_timeline()
+    print("=== TIMELINE POPULATED ===")
     scheduler.update_calendar()
+    print("=== CALENDAR UPDATED ===")
+    print("=== FINISHED ===")
 
     # scheduler.remove_gcal_from_timeline()
     # date = datetime(2023, 4, 8, 5, 5, 5)
