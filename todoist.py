@@ -12,7 +12,9 @@ from googleapiclient.errors import HttpError
 import os.path
 import json
 from collections import defaultdict
-import pytz
+
+PERSONAL_ID = "5c02e21b477adaab0df81d57b444df9b8c977781461df83f0a0ab5957bfaf9b7@group.calendar.google.com"
+SCHEDULER_ID = "5afb0892b1bcaf333681a006b3367b2e3266d38e444d62a48e4b348fc64bf37a@group.calendar.google.com"
 
 
 class Scheduler:
@@ -32,9 +34,13 @@ class Scheduler:
             self.today.year,
             self.today.month,
             self.today.day,
-            11,
+            4,
             00,
             tzinfo=dt.timezone(dt.timedelta(days=-1, seconds=61200)),
+        )
+        self.today_range = (
+            datetime(self.today.year, self.today.month, self.today.day, 0, 0, 0),
+            datetime(self.today.year, self.today.month, self.today.day, 23, 59, 59),
         )
         self.unspecified_tasks = []
         self.last_completed_task = None
@@ -54,19 +60,19 @@ class Scheduler:
             "https://www.googleapis.com/auth/calendar",
             "https://www.googleapis.com/auth/tasks",
         ]
-        if os.path.exists("Schedular/token.json"):
-            self.creds = Credentials.from_authorized_user_file("Schedular/token.json", scopes)
+        if os.path.exists("token.json"):
+            self.creds = Credentials.from_authorized_user_file("token.json", scopes)
         # If there are no (valid) credentials available, let the user log in.
         if not self.creds or not self.creds.valid:
             if self.creds and self.creds.expired and self.creds.refresh_token:
                 self.creds.refresh(Request())
             else:
                 flow = InstalledAppFlow.from_client_secrets_file(
-                    "Schedular/credentials.json", scopes
+                    "credentials.json", scopes
                 )
                 self.creds = flow.run_local_server(port=0)
             # Save the credentials for the next run
-            with open("Schedular/token.json", "w") as token:
+            with open("token.json", "w") as token:
                 token.write(self.creds.to_json())
 
     def get_gcal_tasks(self, is_beginning=False) -> None:
@@ -78,19 +84,12 @@ class Scheduler:
             service = build("calendar", "v3", credentials=self.creds)
             # calendar_list = service.calendarList().list().execute()
             # print(calendar_list)
-            beginning_time = (
-                datetime(self.today.year, self.today.month, self.today.day, 0, 0, 0)
-                if is_beginning
-                else datetime.now()
-            )
-            today_date = [
-                beginning_time,
-                datetime(self.today.year, self.today.month, self.today.day, 23, 59, 59),
-            ]
+            beginning_time = self.today_range[0] if is_beginning else datetime.now()
+            today_date = [beginning_time, self.today_range[1]]
             events_result = (
                 service.events()
                 .list(
-                    calendarId="5c02e21b477adaab0df81d57b444df9b8c977781461df83f0a0ab5957bfaf9b7@group.calendar.google.com",
+                    calendarId=PERSONAL_ID,
                     timeMin=today_date[0].isoformat() + "-07:00",
                     timeMax=today_date[1].isoformat() + "-07:00",
                     singleEvents=True,
@@ -168,6 +167,9 @@ class Scheduler:
 
         blocks = []
         for task in self.timeline.timeline:
+            # iff the start of the task from the google calendar is past the designated end time value, then break the loop
+            if task.start_time > self.end:
+                break
             if cur_time < task.start_time:
                 time_diff = (task.start_time - cur_time).seconds / 60
                 timebuffer = timedelta(minutes=5)
@@ -179,7 +181,8 @@ class Scheduler:
                     time_diff = (task.start_time - end_time).seconds / 60 - 30
                     task_start = end_time + timedelta(minutes=30)
                     blocks.append(timeblock)
-            cur_time = task.end_time
+            # only update the cur_time when the end_time is later b/c if there are multiple events that start at the same time, it's possible for the cur_time to not be sent to the event ending the latest
+            cur_time = task.end_time if task.end_time > cur_time else cur_time
 
         if cur_time < self.end:
             time_diff = (self.end - cur_time).seconds / 60
@@ -200,19 +203,22 @@ class Scheduler:
         Adds the todoist tasks to the timeblocked sections of the timeline
         """
         ordered_tasks = self.get_tasks()
-
+        previously_ordered_tasks = self.get_scheduled_tasks(True)
         timeblocks = self.timeblock_timeline()
         dict_timeline = defaultdict(list)
-        for g_task in ordered_tasks:
+        # TODO: Make sure that the names for todoist tasks aren't duplicated becasue the duplicate todoist tasks will be removed if the original name was previously slotted
+        # TODO: add the 5 minute time buffer b/t tasks
+        time_buffer = timedelta(minutes=5)
+        for task in ordered_tasks:
+            if task.name in previously_ordered_tasks:
+                continue
             for idx, block in enumerate(timeblocks):
                 time_in_block = (block[1] - block[0]).seconds / 60
-                if g_task.duration <= time_in_block:
-                    g_task.start_time = block[0]
-                    g_task.end_time = g_task.start_time + timedelta(
-                        minutes=g_task.duration
-                    )
-                    dict_timeline[idx].append(g_task)
-                    block[0] = g_task.end_time
+                if task.duration <= time_in_block:
+                    task.start_time = block[0]
+                    task.end_time = task.start_time + timedelta(minutes=task.duration)
+                    dict_timeline[idx].append(task)
+                    block[0] = task.end_time
                     break
 
         final_timeline = []
@@ -232,7 +238,6 @@ class Scheduler:
                     break
 
     def update_calendar(self) -> None:
-        scheduler.remove_scheduled_events()
         try:
             service = build("calendar", "v3", credentials=self.creds)
 
@@ -252,7 +257,7 @@ class Scheduler:
                 event = (
                     service.events()
                     .insert(
-                        calendarId="5afb0892b1bcaf333681a006b3367b2e3266d38e444d62a48e4b348fc64bf37a@group.calendar.google.com",
+                        calendarId=SCHEDULER_ID,
                         body=event,
                     )
                     .execute()
@@ -261,22 +266,21 @@ class Scheduler:
         except HttpError as error:
             print("An error occurred: %s" % error)
 
-    def remove_scheduled_events(self, date=None):
+    def remove_scheduled_events(self, date=None, is_beginning=False):
         if not date:
             date = self.today
 
         try:
             service = build("calendar", "v3", credentials=self.creds)
 
-            dates = [
-                datetime(date.year, date.month, date.day, 0, 0, 0),
-            ]
+            start = self.today_range[0] if is_beginning else datetime.now()
 
             res = (
                 service.events()
                 .list(
-                    calendarId="5afb0892b1bcaf333681a006b3367b2e3266d38e444d62a48e4b348fc64bf37a@group.calendar.google.com",
-                    timeMin=dates[0].isoformat() + "-07:00",
+                    calendarId=SCHEDULER_ID,
+                    timeMin=start.isoformat() + "-07:00",
+                    timeMax=self.today_range[1].isoformat() + "-07:00",
                     singleEvents=True,
                 )
                 .execute()
@@ -285,27 +289,64 @@ class Scheduler:
             events = res["items"]
             for event in events:
                 service.events().delete(
-                    calendarId="5afb0892b1bcaf333681a006b3367b2e3266d38e444d62a48e4b348fc64bf37a@group.calendar.google.com",
+                    calendarId=SCHEDULER_ID,
                     eventId=event["id"],
                 ).execute()
 
         except HttpError as error:
             print("An error occurred: %s" % error)
 
+    def get_scheduled_tasks(self, is_earlier_today) -> set:
+        """
+        Get all scheduled tasks previously placed from the Scheduler Bot
+        """
+        try:
+            service = build("calendar", "v3", credentials=self.creds)
+            # calendar_list = service.calendarList().list().execute()
+            # print(calendar_list)
+            time_max = datetime.now() if is_earlier_today else self.today_range[1]
+            events_result = (
+                service.events()
+                .list(
+                    calendarId=SCHEDULER_ID,
+                    timeMin=self.today_range[0].isoformat() + "-07:00",
+                    timeMax=time_max.isoformat() + "-07:00",
+                    singleEvents=True,
+                    orderBy="startTime",
+                )
+                .execute()
+            )
+            ids = set()
+            for item in events_result["items"]:
+                ids.add(item["summary"])
+
+            return ids
+
+        except HttpError as error:
+            print("An error occurred: %s" % error)
+
+    def run(self):
+        self.remove_scheduled_events(is_beginning=True)
+        print("=== PREVIOUSLY SCHEDULED EVENTS REMOVED ===")
+        self.get_gcal_tasks()
+        print("=== RETRIEVED TASKS FROM GOOGLE CALENDAR ===")
+        self.populate_timeline()
+        print("=== TIMELINE POPULATED ===")
+        self.update_calendar()
+        print("=== CALENDAR UPDATED ===")
+        print("=== FINISHED ===")
+
 
 if __name__ == "__main__":
+    # TODO: glitch when repopulating timeline due to checking if previous tasks were already assigned. I think there shouldn't be a glitch b/c code should also be checking if the task was completed
     scheduler = Scheduler()
-    scheduler.get_gcal_tasks()
+    # scheduler.get_gcal_tasks()
+    # for i in scheduler.timeline.timeline:
+    #     print(i)
+    # scheduler.populate_timeline()
+    # scheduler.get_scheduled_tasks(True)
 
-    # scheduler.timeblock_timeline()
-
-    scheduler.populate_timeline()
-    print("=== TIMELINE POPULATED ===")
-    scheduler.update_calendar()
-    print("=== CALENDAR UPDATED ===")
-    print("=== FINISHED ===")
-
-    # scheduler.remove_gcal_from_timeline()
     # date = datetime(2023, 4, 8, 5, 5, 5)
-    # scheduler.remove_scheduled_events()
-    # scheduler.remove_scheduled_events(date)
+    # scheduler.remove_scheduled_events(date, is_beginning=True)
+    # scheduler.remove_scheduled_events(is_beginning=True)
+    scheduler.run()
