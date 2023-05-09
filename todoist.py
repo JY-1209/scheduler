@@ -13,7 +13,7 @@ import os.path
 import json
 from collections import defaultdict
 
-PERSONAL_ID = "5c02e21b477adaab0df81d57b444df9b8c977781461df83f0a0ab5957bfaf9b7@group.calendar.google.com"
+PERSONAL_ID = "justinyg1209@gmail.com"
 SCHEDULER_ID = "5afb0892b1bcaf333681a006b3367b2e3266d38e444d62a48e4b348fc64bf37a@group.calendar.google.com"
 
 
@@ -22,11 +22,12 @@ class Scheduler:
         self.today = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
         # Below time is in PST
         # TODO: figure out why tzinfo=pytz.timezone("US/Pacific") wasn't working
+        # NOTE: Remember that the time and hours in 24hr format not AM/PM format
         self.start = datetime(
             self.today.year,
             self.today.month,
             self.today.day,
-            5,
+            7,
             00,
             tzinfo=dt.timezone(dt.timedelta(days=-1, seconds=61200)),
         )
@@ -34,8 +35,8 @@ class Scheduler:
             self.today.year,
             self.today.month,
             self.today.day,
-            4,
-            00,
+            23,
+            30,
             tzinfo=dt.timezone(dt.timedelta(days=-1, seconds=61200)),
         )
         self.today_range = (
@@ -131,7 +132,11 @@ class Scheduler:
             ordered_list = []
 
             for key, value in order.items():
-                task = self.api.get_task(key)
+                # this try-except block is necessary for instances where a task is deleted but todoist still somehow stores a copy of this task which is then retrieved by the day_orders request. When the deleted task's ID is searched, it is unable to find the task.
+                try:
+                    task = self.api.get_task(key)
+                except:
+                    continue
                 if task.is_completed == True or task.due.date != self.today.strftime(
                     "%Y-%m-%d"
                 ):
@@ -155,6 +160,7 @@ class Scheduler:
             return ordered_list
 
         except Exception as error:
+            print("Get tasks failed")
             print(error)
 
     def timeblock_timeline(self, is_beginning=False) -> list:
@@ -163,7 +169,7 @@ class Scheduler:
         else:
             cur_time = datetime.now(
                 tz=dt.timezone(dt.timedelta(days=-1, seconds=61200))
-            ) - dt.timedelta(minutes=3)
+            ) + dt.timedelta(minutes=2)
 
         blocks = []
         for task in self.timeline.timeline:
@@ -172,28 +178,43 @@ class Scheduler:
                 break
             if cur_time < task.start_time:
                 time_diff = (task.start_time - cur_time).seconds / 60
-                timebuffer = timedelta(minutes=5)
+                # timebuffer is the length of time b/t tasks
+                timebuffer = timedelta(minutes=0)
+                # breaktime is the length of time for a rest b/t timeblocks
+                resttime = timedelta(minutes=0)
+                # represents the length of WORK time in a timeblock. This variable + resttime represents the total length for a timeblock
+                timeblock_time = timedelta(hours=2, minutes=0)
                 task_start = cur_time + timebuffer
-                while time_diff > 30:
-                    next_block_end = task_start + timedelta(hours=1, minutes=30)
+                while time_diff >= 15:  # while time_diff > 30:
+                    next_block_end = task_start + timeblock_time
                     end_time = min(next_block_end, task.start_time - timebuffer)
                     timeblock = [task_start, end_time]
-                    time_diff = (task.start_time - end_time).seconds / 60 - 30
-                    task_start = end_time + timedelta(minutes=30)
+                    time_diff = (task.start_time - end_time).seconds / 60 - (
+                        resttime.seconds / 60
+                    )
+                    task_start = end_time + resttime
                     blocks.append(timeblock)
             # only update the cur_time when the end_time is later b/c if there are multiple events that start at the same time, it's possible for the cur_time to not be sent to the event ending the latest
             cur_time = task.end_time if task.end_time > cur_time else cur_time
 
+        # TODO: check if this is necessary
         if cur_time < self.end:
             time_diff = (self.end - cur_time).seconds / 60
-            timebuffer = timedelta(minutes=5)
+            # timebuffer is the length of time b/t tasks
+            timebuffer = timedelta(minutes=0)
+            # breaktime is the length of time for a rest b/t timeblocks
+            resttime = timedelta(minutes=0)
+            # represents the length of WORK time in a timeblock. This variable + resttime represents the total length for a timeblock
+            timeblock_time = timedelta(hours=2, minutes=0)
             task_start = cur_time + timebuffer
-            while time_diff > 30:
-                next_block_end = task_start + timedelta(hours=1, minutes=30)
+            while (
+                time_diff >= 15
+            ):  # 15 minutes is the minimum length of time for a task
+                next_block_end = task_start + timeblock_time
                 end_time = min(next_block_end, self.end - timebuffer)
                 timeblock = [task_start, end_time]
-                time_diff = (self.end - end_time).seconds / 60 - 30
-                task_start = end_time + timedelta(minutes=30)
+                time_diff = (self.end - end_time).seconds / 60 - (resttime.seconds / 60)
+                task_start = end_time + resttime
                 blocks.append(timeblock)
 
         return blocks
@@ -267,20 +288,26 @@ class Scheduler:
             print("An error occurred: %s" % error)
 
     def remove_scheduled_events(self, date=None, is_beginning=False):
-        if not date:
-            date = self.today
+        date_time_range = (
+            (
+                datetime(date.year, date.month, date.day, 0, 0, 0),
+                datetime(date.year, date.month, date.day, 23, 59, 59),
+            )
+            if date
+            else self.today_range
+        )
 
         try:
             service = build("calendar", "v3", credentials=self.creds)
 
-            start = self.today_range[0] if is_beginning else datetime.now()
+            start = date_time_range[0] if is_beginning else datetime.now()
 
             res = (
                 service.events()
                 .list(
                     calendarId=SCHEDULER_ID,
                     timeMin=start.isoformat() + "-07:00",
-                    timeMax=self.today_range[1].isoformat() + "-07:00",
+                    timeMax=date_time_range[1].isoformat() + "-07:00",
                     singleEvents=True,
                 )
                 .execute()
@@ -346,7 +373,7 @@ if __name__ == "__main__":
     # scheduler.populate_timeline()
     # scheduler.get_scheduled_tasks(True)
 
-    # date = datetime(2023, 4, 8, 5, 5, 5)
+    # date = datetime(2023, 4, 26, 5, 5, 5)
     # scheduler.remove_scheduled_events(date, is_beginning=True)
     # scheduler.remove_scheduled_events(is_beginning=True)
     scheduler.run()
