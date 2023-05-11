@@ -101,6 +101,9 @@ class Scheduler:
             items = events_result["items"]
 
             for item in items:
+                # The date key is in all day events and is not necessary for the scheduler. This if statement is to prevent the scheduler from adding all day events to the timeline.
+                if "date" in item["start"]:
+                    continue
                 name = item["summary"]
                 description = item["description"] if "description" in item else ""
                 end = datetime.fromisoformat(item["end"]["dateTime"])
@@ -144,13 +147,9 @@ class Scheduler:
                 name = task.content
                 priority = value
                 notes = ""
-                time = task.description.split(":") if task.description else 0
-                if time != 0:
-                    hours = int(time[0])
-                    min = int(time[1])
-                else:
-                    hours = 0
-                    min = 15
+                time = task.description.split(":") if task.description else (0, 0)
+                hours = int(time[0])
+                min = int(time[1])
                 duration = hours * 60 + min
                 new_task = EventTask(name, notes, duration, self.today, priority)
 
@@ -230,17 +229,47 @@ class Scheduler:
         # TODO: Make sure that the names for todoist tasks aren't duplicated becasue the duplicate todoist tasks will be removed if the original name was previously slotted
         # TODO: add the 5 minute time buffer b/t tasks
         time_buffer = timedelta(minutes=5)
-        for task in ordered_tasks:
+        for index, task in enumerate(ordered_tasks):
+            # don't add the task if it was already scheduled
             if task.name in previously_ordered_tasks:
                 continue
+            # The task duration == 0 when the task is an all day event
+            if task.duration == 0:
+                task.start_time = task.due_date
+                task.end_time = task.due_date
+                continue
+            first_short_timeblock = None
+            # schedule the task in its corresponding timeblock
             for idx, block in enumerate(timeblocks):
                 time_in_block = (block[1] - block[0]).seconds / 60
+                if not first_short_timeblock and time_in_block >= 30:
+                    first_short_timeblock = (idx, block)
+                # Schedule the time if the task can fit in the timeblock
                 if task.duration <= time_in_block:
                     task.start_time = block[0]
                     task.end_time = task.start_time + timedelta(minutes=task.duration)
                     dict_timeline[idx].append(task)
                     block[0] = task.end_time
+                    # set first_short_timeblock to None so that the task isn't scheduled in a shorter timeblock
+                    first_short_timeblock = None
                     break
+            # If the task wasn't able to be scheduled in any of the timeblocks, try to find a shorter timeblock to fit it in
+            # true iff the task was not scheduled
+            if first_short_timeblock:
+                idx = first_short_timeblock[0]
+                block = first_short_timeblock[1]
+                task.start_time = block[0]
+                task.end_time = block[1]
+                dict_timeline[idx].append(task)
+                block[0] = task.end_time
+                derivative_task = EventTask(
+                    task.name,
+                    task.description,
+                    (task.end_time - task.start_time).seconds / 60,
+                    task.due_date,
+                    task.priority,
+                )
+                ordered_tasks.insert(index + 1, derivative_task)
 
         final_timeline = []
         for idx in range(len(dict_timeline.keys())):
@@ -263,18 +292,27 @@ class Scheduler:
             service = build("calendar", "v3", credentials=self.creds)
 
             for item in self.timeline.timeline:
-                event = {
-                    "summary": item.name,
-                    "description": item.description,
-                    "start": {
-                        "dateTime": item.start_time.isoformat(),
-                        "timeZone": "America/Los_Angeles",
-                    },
-                    "end": {
-                        "dateTime": item.end_time.isoformat(),
-                        "timeZone": "America/Los_Angeles",
-                    },
-                }
+                # the duration of the task is 0 when the task is an all day event
+                if item.duration == 0:
+                    event = {
+                        "summary": item.name,
+                        "description": item.description,
+                        "start": item.start_time,
+                        "end": item.end_time,
+                    }
+                else:
+                    event = {
+                        "summary": item.name,
+                        "description": item.description,
+                        "start": {
+                            "dateTime": item.start_time.isoformat(),
+                            "timeZone": "America/Los_Angeles",
+                        },
+                        "end": {
+                            "dateTime": item.end_time.isoformat(),
+                            "timeZone": "America/Los_Angeles",
+                        },
+                    }
                 event = (
                     service.events()
                     .insert(
@@ -359,6 +397,8 @@ class Scheduler:
         print("=== RETRIEVED TASKS FROM GOOGLE CALENDAR ===")
         self.populate_timeline()
         print("=== TIMELINE POPULATED ===")
+        # for event in self.timeline.timeline:
+        #     print(event)
         self.update_calendar()
         print("=== CALENDAR UPDATED ===")
         print("=== FINISHED ===")
