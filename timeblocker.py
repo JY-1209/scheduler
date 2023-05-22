@@ -34,9 +34,9 @@ class Scheduler:
         self.end = datetime(
             self.today.year,
             self.today.month,
-            self.today.day,
-            23,
-            30,
+            self.today.day + 1,
+            0,
+            0,
             tzinfo=dt.timezone(dt.timedelta(days=-1, seconds=61200)),
         )
         self.today_range = (
@@ -116,7 +116,7 @@ class Scheduler:
                 self.gcal_tasks.add(new_task)
 
         except HttpError as error:
-            print("An error occurred: %s" % error)
+            print("An error occurred in get_gcal_tasks(): %s" % error)
 
     def get_tasks(self) -> list:
         try:
@@ -159,7 +159,7 @@ class Scheduler:
             return ordered_list
 
         except Exception as error:
-            print("Get tasks failed")
+            print("get_tasks() failed")
             print(error)
 
     def timeblock_timeline(self, is_beginning=False) -> list:
@@ -236,7 +236,8 @@ class Scheduler:
             # The task duration == 0 when the task is an all day event
             if task.duration == 0:
                 task.start_time = task.due_date
-                task.end_time = task.due_date
+                task.end_time = task.due_date + timedelta(days=1)
+                dict_timeline["all_day"].append(task)
                 continue
             first_short_timeblock = None
             # schedule the task in its corresponding timeblock
@@ -274,6 +275,7 @@ class Scheduler:
         final_timeline = []
         for idx in range(len(dict_timeline.keys())):
             final_timeline += dict_timeline[idx]
+        final_timeline += dict_timeline["all_day"]
         self.timeline.timeline = final_timeline
 
     def remove_gcal_from_timeline(self) -> None:
@@ -297,8 +299,12 @@ class Scheduler:
                     event = {
                         "summary": item.name,
                         "description": item.description,
-                        "start": item.start_time,
-                        "end": item.end_time,
+                        "start": {
+                            "date": str(item.start_time.date()),
+                        },
+                        "end": {
+                            "date": str(item.end_time.date()),
+                        },
                     }
                 else:
                     event = {
@@ -323,7 +329,7 @@ class Scheduler:
                 )
 
         except HttpError as error:
-            print("An error occurred: %s" % error)
+            print("An error occurred in update_calendar(): %s" % error)
 
     def remove_scheduled_events(self, date=None, is_beginning=False):
         date_time_range = (
@@ -359,7 +365,7 @@ class Scheduler:
                 ).execute()
 
         except HttpError as error:
-            print("An error occurred: %s" % error)
+            print("An error occurred in remove_scheduled_events(): %s" % error)
 
     def get_scheduled_tasks(self, is_earlier_today) -> set:
         """
@@ -388,7 +394,7 @@ class Scheduler:
             return ids
 
         except HttpError as error:
-            print("An error occurred: %s" % error)
+            print("An error occurred in get_scheduled_tasks(): %s" % error)
 
     def run(self):
         self.remove_scheduled_events(is_beginning=True)
